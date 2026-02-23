@@ -11,15 +11,58 @@
 
 using namespace std;
 
-const uint8_t PRESENT_80_CORE::PRESENT80_SBOX[16] = {    0xC, 0x5, 0x6, 0xB, 
-                                        0x9, 0x0, 0xA, 0xD, 
-                                        0x3, 0xE, 0xF, 0x8, 
-                                        0x4, 0x7, 0x1, 0x2
-                                    };
+const uint8_t PRESENT_80_CORE::PRESENT80_SBOX[16] = {0xC, 0x5, 0x6, 0xB,
+                                                     0x9, 0x0, 0xA, 0xD,
+                                                     0x3, 0xE, 0xF, 0x8,
+                                                     0x4, 0x7, 0x1, 0x2};
+
+const __m128i PRESENT_80_CORE::RC[32] =
+    {
+        _mm_set_epi64x(0, 0x00000000), // round 0 (unused)
+        _mm_set_epi64x(0, 0x00008000), // round 1
+        _mm_set_epi64x(0, 0x00010000), // round 2
+        _mm_set_epi64x(0, 0x00018000), // round 3
+        _mm_set_epi64x(0, 0x00020000), // round 4
+        _mm_set_epi64x(0, 0x00028000), // round 5
+        _mm_set_epi64x(0, 0x00030000), // round 6
+        _mm_set_epi64x(0, 0x00038000), // round 7
+        _mm_set_epi64x(0, 0x00040000), // round 8
+        _mm_set_epi64x(0, 0x00048000), // round 9
+        _mm_set_epi64x(0, 0x00050000), // round 10
+        _mm_set_epi64x(0, 0x00058000), // round 11
+        _mm_set_epi64x(0, 0x00060000), // round 12
+        _mm_set_epi64x(0, 0x00068000), // round 13
+        _mm_set_epi64x(0, 0x00070000), // round 14
+        _mm_set_epi64x(0, 0x00078000), // round 15
+        _mm_set_epi64x(0, 0x00080000), // round 16
+        _mm_set_epi64x(0, 0x00088000), // round 17
+        _mm_set_epi64x(0, 0x00090000), // round 18
+        _mm_set_epi64x(0, 0x00098000), // round 19
+        _mm_set_epi64x(0, 0x000A0000), // round 20
+        _mm_set_epi64x(0, 0x000A8000), // round 21
+        _mm_set_epi64x(0, 0x000B0000), // round 22
+        _mm_set_epi64x(0, 0x000B8000), // round 23
+        _mm_set_epi64x(0, 0x000C0000), // round 24
+        _mm_set_epi64x(0, 0x000C8000), // round 25
+        _mm_set_epi64x(0, 0x000D0000), // round 26
+        _mm_set_epi64x(0, 0x000D8000), // round 27
+        _mm_set_epi64x(0, 0x000E0000), // round 28
+        _mm_set_epi64x(0, 0x000E8000), // round 29
+        _mm_set_epi64x(0, 0x000F0000), // round 30
+        _mm_set_epi64x(0, 0x000F8000)  // round 31
+};
 
 PRESENT_80_CORE::PRESENT_80_CORE(__m128i key)
 {
-    expandRoundKeys(key, 1);
+    RoundKeys[0] = key;
+    // cout << "~~~~~~~~~~~~~~~~~~~~ Round 1 ~~~~~~~~~~~~~~~~~~~~~~~~" << endl;
+    // expandRoundKeys(RoundKeys[0], 0); 
+
+     for(int    round=1; round<32; ++round){
+         cout << "#### ROUND NUMBER : " << round <<  " #### " <<endl;
+         expandRoundKeys(RoundKeys[round-1], round);
+         present80_internal::print_m128i("Roundkey ", RoundKeys[round]);
+     }
 }
 
 // functiont that will perform the rotation inside the SIMD register
@@ -29,120 +72,135 @@ __m128i PRESENT_80_CORE::shiftBytesInsideBlock(__m128i block, present80_internal
     return _mm_shuffle_epi8(block, mask);
 }
 
-//This function rotates the key left by 61 bits
-// It does that in 4 parts 
-// since we're implementing the Cypher usign SIMD instrinsics, we will make use of __m12i data type which mimics a CPU register 
-// 1. Load the rotation mask so that we can move the  bytes easily accross the block >> rotate the block by 2 bytes to the the right 
-// 2. break down the block into 2 parts. Hi and Lo. Initially copy the whole block in 2 128 bt words - hi and lo 
-// 3. Lo block to be shifted right by 3 bytes
-//    Hi block to be shifted left by 61 bytes 
-// 4. now the high and the low bytes are in the right order, just OR the 2 blocks, 
-// there would be zeroes in the lower bits of the high block whcih would be filled by teh lower block
-// fianlly in the original 
+// This function rotates the key left by 61 bits using the traditional way 
+// 1. Extracting bytes into a local array
+// 2. Reconstructing the 80‑bit key
+// 3. The rotation math
+// 4. Packing back into bytes
+// 5. Returning the block
 __m128i PRESENT_80_CORE::rotateLeftBy61Bits(__m128i block)
 {
-    
-    // Step 1: rotate right by 2 bytes / 16 bits
-    const __m128i mask = _mm_set_epi8(
-1, 0, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2
-    );
+    // Step 1: Extract bytes 0-9 (80 bits)
+    alignas(16) uint8_t bytes[16];
+    _mm_store_si128((__m128i*)bytes, block);
 
-    block = _mm_shuffle_epi8(block, mask);
-    present80_internal::print_m128i("Original - After shuffling", block);
+    // Step 2: Combine 80-bit key into 64-bit + 16-bit parts
+    uint64_t hi = 0; // bits 79..16
+    uint16_t lo = 0; // bits 15..0
 
-    // Step 2: copying the key into a low-block and high-block of 64 -bits ( 8 bytes)
-    __m128i low = block;
-    __m128i high = block;
+    // hi = bytes[0..7] (MSB first)
+    for (int i = 0; i < 8; ++i) {
+        hi <<= 8;
+        hi |= bytes[i];
+    }
 
-    // Step 3: rotate right 3 bits     
-    low = _mm_srli_epi64(low, 3);
-    high = _mm_slli_epi64(high, 61);
-    
-    present80_internal::print_m128i("Low Byte After right shift by 3", low);
-    present80_internal::print_m128i("High Byte  After left shift by 61", high);
+    // lo = bytes[8..9]
+    lo = (bytes[8] << 8) | bytes[9];
 
-    // Step 4: Combine the high and the low block using ligical OR and recrete the _m128i block    
-    __m128i rotated = _mm_or_si128(low, high);
-    present80_internal::print_m128i("Low and High Merged", rotated);
+    // Step 3: Perform 80-bit rotate left by 61
+    // Formula: newKey = (key << 61) | (key >> 19)
+    uint64_t new_hi = ((hi << 61) | ((uint64_t)lo << 61 >> 64) | (hi >> 19));
+    uint16_t new_lo = ((hi << 61) >> 64) | (lo >> 3);
 
-    // create a mask to discard the higher bytes from the block i.e. byte 10 - 15, 
-    // and to keep bytes 0 - 9  
-    __m128i keep80 = _mm_set_epi8(
-        0,0,0,0,0,0,
-        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1
-    );
-     present80_internal::print_m128i("Mask to retain only lower 10 bytes in the Register ", keep80);
-    // apply the mask to the block and we're done
-    
-    __m128i rotated_left_by_61_bits = _mm_and_si128(rotated, keep80);
-    present80_internal::print_m128i("After final rotation ", rotated_left_by_61_bits);
+    // Step 4: Pack back into bytes
+    for (int i = 7; i >= 0; --i) {
+        bytes[i] = new_hi & 0xFF;
+        new_hi >>= 8;
+    }
+    bytes[8] = (new_lo >> 8) & 0xFF;
+    bytes[9] = new_lo & 0xFF;
 
-    return rotated_left_by_61_bits;
+    // Zero upper bytes
+    for (int i = 10; i < 16; ++i)
+        bytes[i] = 0;
+
+    // Step 5: Load back into __m128i
+    return _mm_load_si128((__m128i*)bytes);
 }
 
-
-__m128i PRESENT_80_CORE::rotateLeftBy61Bits_SIMD_ONLY(__m128i block){
-
-    __m128i LowerLanesRearrangement = _mm_shuffle_epi32(block, _MM_SHUFFLE(2,1,1,0));
+// This function performs the 61 bit left shit in the 80 bit word but using SIMD intrinsics thus exploting the CPU's 
+// Vectorised instructions(SIMD) to get things done faster and easier. Here's the algorithm 
+// 1. Lane Extraction for the Lower Bits
+// 2. Right‑shift by 19
+// 3. Masking the Lower Contribution
+// 4. Packing back into bytes
+// 5. Returning the block
+// 4. Shuffle to Align the Lower Bits
+// 5. Upper Lanes Extraction
+// 6. Right‑shift by 3
+// 7. Masking the Upper Contribution
+// 8. Shuffle to Align the Upper Bits
+// 9. Merge the 2 parts
+__m128i PRESENT_80_CORE::rotateLeftBy61Bits_SIMD_ONLY(__m128i block)
+{
+    //load lanes 2, 1, 1, 0 from the original key into a 128 bit block
+    __m128i LowerLanesRearrangement = _mm_shuffle_epi32(block, _MM_SHUFFLE(2, 1, 1, 0));
     present80_internal::print_m128i("LowerLanesRearrangement with lanes 2,1,1,0 from orignal key", LowerLanesRearrangement);
 
+    // shift right by 19 bits, this way you'll get the bits 31-0 of the lower lane ready for the final output 
+    // you'll also get bits 61-32 of the upper lane reader for the final output 
     LowerLanesRearrangement = _mm_srli_epi64(LowerLanesRearrangement, 19);
     present80_internal::print_m128i("LowerLanesRearrangement >> 19", LowerLanesRearrangement);
 
+    // creating a mask to remove the bits that we don't need
     // create a mask   [
     //                   00 00 00 00 | 00000000 00000000 00000000 00000000
     //                   1F FF FF FF | 00011111 11111111 11111111 11111111
     //                   00 00 00 00 | 00000000 00000000 00000000 00000000
     //                   FF FF FF FF | 11111111 11111111 11111111 11111111
     //                ]
-    __m128i maskLower = _mm_set_epi32(        0x00, 
-                                        0x1FFFFFFF, 
-                                              0x00, 
-                                        0xFFFFFFFF);
- 
+    __m128i maskLower = _mm_set_epi32(0x00,
+                                      0x1FFFFFFF,
+                                      0x00,
+                                      0xFFFFFFFF);
+    present80_internal::print_m128i("LowerLanesRearrangement mask", maskLower);
 
-                                        present80_internal::print_m128i("LowerLanesRearrangement mask", maskLower);
-
-    // intrnsic for LowerLanesRearrangement = LowerLanesRearrangement AND Mask
-    LowerLanesRearrangement = _mm_and_si128(LowerLanesRearrangement, maskLower); 
+    // LowerLanesRearrangement AND Mask - to remove the unwanted bits 
+    LowerLanesRearrangement = _mm_and_si128(LowerLanesRearrangement, maskLower);
     present80_internal::print_m128i("LowerLanesRearrangement AND mask", LowerLanesRearrangement);
 
-    LowerLanesRearrangement = _mm_shuffle_epi32(LowerLanesRearrangement, _MM_SHUFFLE(1,1,2,0));
+    //rearranging get the bits 31-0 and bits 61-32 in the right bit postions for the final output
+    // this is the LSB part of left rotated 61-bit word  
+    LowerLanesRearrangement = _mm_shuffle_epi32(LowerLanesRearrangement, _MM_SHUFFLE(1, 1, 2, 0));
     present80_internal::print_m128i("LowerLanesRearrangement shuffled with the lanes 1,1,2,0 to get the LSBs aligned", LowerLanesRearrangement);
 
-
-
-    __m128i UpperLanesRearrangement = _mm_shuffle_epi32(block, _MM_SHUFFLE(0,0,0,0));
+    //loading lane 0 accross all the 4 lanes in the 128 bit SIMD register.
+    // These lower bits from the original key will occupy the MSB in after left rotation 
+    __m128i UpperLanesRearrangement = _mm_shuffle_epi32(block, _MM_SHUFFLE(0, 0, 0, 0));
     present80_internal::print_m128i("UpperLanesRearrangement with lanes 0,0,0,0 from the original key", UpperLanesRearrangement);
 
+    //rotate right by 3 bits.
+    // if you recall this mask from above :
+    //                   00 00 00 00 | 00000000 00000000 00000000 00000000
+    //                   1F FF FF FF | 00011111 11111111 11111111 11111111
+    //                   00 00 00 00 | 00000000 00000000 00000000 00000000
+    //                   FF FF FF FF | 11111111 11111111 11111111 11111111
+    // you'll notice that lane 2(1F FF FF FF | 00011111 11111111 11111111 11111111) has 000 at its MSBs.
+    // after rotating-right the 32 LSBs of the original key by 3 bits, those 3 LSBs will fall into these positons and will compelte the key 
     UpperLanesRearrangement = _mm_srli_epi64(UpperLanesRearrangement, 3);
-     present80_internal::print_m128i("UpperLanesRearrangement >> 3", UpperLanesRearrangement); 
-    //instrincs for :  create a mask  
-    //                      [ 
-    //                        00 00 FF FF | 00000000 00000000 11111111 11111111
-    //                        E0 00 00 00 | 11100000 00000000 00000000 00000000
-    //                        00 00 00 00 | 00000000 00000000 00000000 00000000
-    //                        00 00 00 00 | 00000000 00000000 00000000 00000000   
-    //                      ]
-    // Mask for UpperLanes [0, 0, 0x0000FFFF, 0x00000000] 
-    // Note: PRESENT-80 uses bits 0-79. 
-    // We mask to keep only the relevant moved bits.
+    present80_internal::print_m128i("UpperLanesRearrangement >> 3", UpperLanesRearrangement);
+    // instrincs for :  create a mask
+    //                       [
+    //                         00 00 FF FF | 00000000 00000000 11111111 11111111
+    //                         E0 00 00 00 | 11100000 00000000 00000000 00000000
+    //                         00 00 00 00 | 00000000 00000000 00000000 00000000
+    //                         00 00 00 00 | 00000000 00000000 00000000 00000000
+    //                       ]
+    //  Mask for UpperLanes [0, 0, 0x0000FFFF, 0x00000000]
+    //  We mask to keep only the relevant moved bits.
+    __m128i maskHigher = _mm_set_epi32(0x0000FFFF,
+                                       0xE0000000,
+                                       0x00,
+                                       0x00);
+    present80_internal::print_m128i("UpperLanesRearrangement mask", maskHigher);
 
-__m128i maskHigher = _mm_set_epi32(       0x0000FFFF, 
-                                          0xE0000000, 
-                                                0x00, 
-                                                0x00);
-
-present80_internal::print_m128i("UpperLanesRearrangement mask", maskHigher);
-       
-    // intrnsic for UpperLanesRearrangement = UpperLanesRearrangement AND Mask
+    // intrnsic for UpperLanesRearrangement = UpperLanesRearrangement AND Mask to get the required bits and zero-ing the rest
     UpperLanesRearrangement = _mm_and_si128(UpperLanesRearrangement, maskHigher);
     present80_internal::print_m128i("UpperLanesRearrangement AND mask", UpperLanesRearrangement);
 
-    UpperLanesRearrangement = _mm_shuffle_epi32(UpperLanesRearrangement, _MM_SHUFFLE(0,3,2,0));
+    //shurffling the lanes so that the final orde aligns with the 80 bit output  
+    UpperLanesRearrangement = _mm_shuffle_epi32(UpperLanesRearrangement, _MM_SHUFFLE(0, 3, 2, 0));
     present80_internal::print_m128i("UpperLanesRearrangement shuffled with the lanes 0,3,2,0 to get the MSBs aligned", UpperLanesRearrangement);
-
-
 
     // We use OR to merge the bits into the final 80-bit state
     // instrincs for result = pperLanesRearrangement AND LowerLanesRearrangement
@@ -150,10 +208,8 @@ present80_internal::print_m128i("UpperLanesRearrangement mask", maskHigher);
     present80_internal::print_m128i("UpperLanesRearrangement OR  LowerLanesRearrangement", result);
 
     return result;
-
 }
- 
- 
+
 void PRESENT_80_CORE::expandRoundKeys(__m128i key, uint8_t Round)
 {
     present80_internal::print_m128i("Original Key", key);
@@ -161,23 +217,51 @@ void PRESENT_80_CORE::expandRoundKeys(__m128i key, uint8_t Round)
     key = rotateLeftBy61Bits_SIMD_ONLY(key);
     present80_internal::print_m128i("rotated_left_by_61_bis", key);
 
-    uint8_t topByte = _mm_extract_epi8(key, 9);  // extracting the top byte from the rotated key
-    uint8_t upper_nibble = PRESENT80_SBOX[topByte >> 4];// right shft the top byte by 4 bits to get the higher nible and get the S-box value at the nibble
-    topByte = (topByte & 0x0F) | (upper_nibble << 4);   // make space inside the upper nibble  from the key as that we can insert the substituted value back
-    key = _mm_insert_epi8(key, topByte, 9);             // reinsertt the byte into the key 
-    present80_internal::print_m128i("Substituted Top Nibble", key);
+    uint8_t topByte = _mm_extract_epi8(key, 9);          // extracting the top byte from the rotated key
+    cout << "topByte = 0x" << setw(2) << setfill('0') << hex << (int)topByte << dec << endl;
+
+    uint8_t upperNibble = topByte >> 4;                  // right shft the top byte by 4 bits to get the higher nible 
+    cout << "upperNibble = 0x" << setw(2) << setfill('0') << hex << (int)upperNibble << dec << endl;
+
+    uint8_t upperNibbleSubstitution  = PRESENT80_SBOX[upperNibble]; // get the S-box value at the nibble
+    cout << "upperNibbleSubstitution = 0x" << setw(2) << setfill('0') << hex << (int)upperNibbleSubstitution << dec << endl;
+
+   // cout << "SBox substitution for " <<hex << upperNibble <<" = " <<upperNibbleSubstitution << dec << endl;  
+    topByte = (topByte & 0x0F) | (upperNibbleSubstitution << 4);    // make space inside the upper nibble  from the key as that we can insert the substituted value back
+    cout << "upperNibble reinsertion into top byte = 0x" << setw(2) << setfill('0') << hex << (int)topByte << dec << endl;
+
+    //cout << "Top Byte = " <<hex << topByte <<dec <<endl;
+    key = _mm_insert_epi8(key, topByte, 9);              // reinsertt the byte into the key
+    present80_internal::print_m128i("Substituted Top Nibble back into the key", key);
+
+//    uint64_t rc = (Round & 0x1F);   // generating the 5-bit round constant
+//    uint64_t rc_shifted = rc << 15; // move into bit positions 19..15
+
+    present80_internal::print_m128i("round Constant", RC[Round]); // XORing the round key with the round constant
+    // XOR into lane0 (bits 19..15)
+    key = _mm_xor_si128(key, RC[Round]);
+    present80_internal::print_m128i("Final RoundKey : After XOR-ing with the round Constant", key);
+
+    // adding the roundkey to the roundKeys  array
+    RoundKeys[Round] = key;
+
+    // code to test the S box Substituton separately
+    //__m128i testData = _mm_set_epi64x(0x000000000000C000, 0x00000000FF00FF00); 
+//
+    //uint8_t TB = _mm_extract_epi8(testData, 9);           // extracting the top byte from the rotated key
+    //cout << "topByte = 0x" << setw(2) << setfill('0') << hex << (int)TB << dec << endl;
+    //
+    //uint8_t Up_Nib = TB >> 4 ;
+    //                // right shft the top byte by 4 bits to get the higher nible 
+    //cout << "Up_Nib = 0x" << setw(2) << setfill('0') << hex << (int)Up_Nib << dec << endl;
+    //
+    //uint8_t S_BOX_index = (int)Up_Nib;
+    //cout << "S_BOX_index = " << S_BOX_index << endl;
+//
+    //uint8_t S_BOX_VAL  = PRESENT80_SBOX[S_BOX_index]; 
+    //cout << "S_BOX_VAL = 0x" << setw(2) << setfill('0') << hex << (int)S_BOX_VAL << dec << endl;
+    //
+    //TB = (TB & 0x0F) | (Up_Nib << 4);
+    //cout << "topByte = 0x" << setw(2) << setfill('0') << hex << (int)TB << dec << endl;
  
-    uint64_t rc = (Round & 0x1F); // generating the 5-bit round constant
-    uint64_t rc_shifted = rc << 15; // move into bit positions 19..15
-    cout << hex <<  "RC:" <<rc << "RC Shfited by 15 bits left:"<< rc_shifted <<endl <<dec;
-
-    __m128i rc_vec = _mm_set_epi64x(0, rc_shifted); //create a 128 bit block for XOR-ing the RC with the key
-    present80_internal::print_m128i("round Constant", rc_vec);
-
-    // XOR into lane0 (bits 19..15) 
-    key = _mm_xor_si128(key, rc_vec);
-     present80_internal::print_m128i("XOR-ing with the round Cosntant", key);
-
-
 }
- 
