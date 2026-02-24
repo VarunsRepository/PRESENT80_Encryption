@@ -1,13 +1,22 @@
 #pragma once
+
 #include <iostream>
 #include <iomanip>
 #include <bitset>
 #include <cstdint>
 // #include <wmmintrin.h> // to make use of all SingleInstructionMultipleData(SIMD) instructions that we're using for our encryption-process.
-// #include <emmintrin.h> // to make use of all SingleInstructionMultipleData(SIMD) instructions that we're using for our encryption-process.
 #include <smmintrin.h> // to make use of all SingleInstructionMultipleData(SIMD) instructions that we're using for our encryption-process.
 #include "PRESENT80.h"
 #include "Helper.h"
+#include <emmintrin.h>   // exposes _mm_cvtsi128_si64 on MSVC
+#include <intrin.h>
+#include <smmintrin.h>   // SSE4.1
+
+// to force the compiler to use the 64 bit version compiler 
+#if !defined(_M_X64) && !defined(__x86_64__)
+#error "Listen mate, this needs a 64-bit compiler! Switch to x64." // 
+#endif
+
 
 using namespace std;
 
@@ -15,6 +24,13 @@ const uint8_t PRESENT_80_CORE::PRESENT80_SBOX[16] = {0xC, 0x5, 0x6, 0xB,
                                                      0x9, 0x0, 0xA, 0xD,
                                                      0x3, 0xE, 0xF, 0x8,
                                                      0x4, 0x7, 0x1, 0x2};
+
+const __m128i SIMD_S_BOX = _mm_set_epi8(  //SIMD-freidnly version S Box that'll be used to substitution Layer.
+        0x02, 0x01, 0x07, 0x04,           // it contains the same S_box as above but in reverse order. 
+        0x08, 0x0F, 0x0E, 0x03,           // The first byte in the rght hand side constant is the value at 0xF positon in the S-box
+        0x0D, 0x0A, 0x00, 0x09,           // and the last is the byte at the first position in the above S-box
+        0x0B, 0x06, 0x05, 0x0C
+    );
 
 const __m128i PRESENT_80_CORE::RC[32] =
     {
@@ -64,6 +80,7 @@ PRESENT_80_CORE::PRESENT_80_CORE(__m128i key)
          present80_internal::print_m128i("Roundkey ", RoundKeys[round]);
      }
 }
+
 
 // functiont that will perform the rotation inside the SIMD register
 __m128i PRESENT_80_CORE::shiftBytesInsideBlock(__m128i block, present80_internal::rotationType mode)
@@ -135,12 +152,12 @@ __m128i PRESENT_80_CORE::rotateLeftBy61Bits_SIMD_ONLY(__m128i block)
 {
     //load lanes 2, 1, 1, 0 from the original key into a 128 bit block
     __m128i LowerLanesRearrangement = _mm_shuffle_epi32(block, _MM_SHUFFLE(2, 1, 1, 0));
-    present80_internal::print_m128i("LowerLanesRearrangement with lanes 2,1,1,0 from orignal key", LowerLanesRearrangement);
+//    present80_internal::print_m128i("LowerLanesRearrangement with lanes 2,1,1,0 from orignal key", LowerLanesRearrangement);
 
     // shift right by 19 bits, this way you'll get the bits 31-0 of the lower lane ready for the final output 
     // you'll also get bits 61-32 of the upper lane reader for the final output 
     LowerLanesRearrangement = _mm_srli_epi64(LowerLanesRearrangement, 19);
-    present80_internal::print_m128i("LowerLanesRearrangement >> 19", LowerLanesRearrangement);
+//    present80_internal::print_m128i("LowerLanesRearrangement >> 19", LowerLanesRearrangement);
 
     // creating a mask to remove the bits that we don't need
     // create a mask   [
@@ -153,21 +170,21 @@ __m128i PRESENT_80_CORE::rotateLeftBy61Bits_SIMD_ONLY(__m128i block)
                                       0x1FFFFFFF,
                                       0x00,
                                       0xFFFFFFFF);
-    present80_internal::print_m128i("LowerLanesRearrangement mask", maskLower);
+//    present80_internal::print_m128i("LowerLanesRearrangement mask", maskLower);
 
     // LowerLanesRearrangement AND Mask - to remove the unwanted bits 
     LowerLanesRearrangement = _mm_and_si128(LowerLanesRearrangement, maskLower);
-    present80_internal::print_m128i("LowerLanesRearrangement AND mask", LowerLanesRearrangement);
+//    present80_internal::print_m128i("LowerLanesRearrangement AND mask", LowerLanesRearrangement);
 
     //rearranging get the bits 31-0 and bits 61-32 in the right bit postions for the final output
     // this is the LSB part of left rotated 61-bit word  
     LowerLanesRearrangement = _mm_shuffle_epi32(LowerLanesRearrangement, _MM_SHUFFLE(1, 1, 2, 0));
-    present80_internal::print_m128i("LowerLanesRearrangement shuffled with the lanes 1,1,2,0 to get the LSBs aligned", LowerLanesRearrangement);
+//    present80_internal::print_m128i("LowerLanesRearrangement shuffled with the lanes 1,1,2,0 to get the LSBs aligned", LowerLanesRearrangement);
 
     //loading lane 0 accross all the 4 lanes in the 128 bit SIMD register.
     // These lower bits from the original key will occupy the MSB in after left rotation 
     __m128i UpperLanesRearrangement = _mm_shuffle_epi32(block, _MM_SHUFFLE(0, 0, 0, 0));
-    present80_internal::print_m128i("UpperLanesRearrangement with lanes 0,0,0,0 from the original key", UpperLanesRearrangement);
+//    present80_internal::print_m128i("UpperLanesRearrangement with lanes 0,0,0,0 from the original key", UpperLanesRearrangement);
 
     //rotate right by 3 bits.
     // if you recall this mask from above :
@@ -178,7 +195,7 @@ __m128i PRESENT_80_CORE::rotateLeftBy61Bits_SIMD_ONLY(__m128i block)
     // you'll notice that lane 2(1F FF FF FF | 00011111 11111111 11111111 11111111) has 000 at its MSBs.
     // after rotating-right the 32 LSBs of the original key by 3 bits, those 3 LSBs will fall into these positons and will compelte the key 
     UpperLanesRearrangement = _mm_srli_epi64(UpperLanesRearrangement, 3);
-    present80_internal::print_m128i("UpperLanesRearrangement >> 3", UpperLanesRearrangement);
+//    present80_internal::print_m128i("UpperLanesRearrangement >> 3", UpperLanesRearrangement);
     // instrincs for :  create a mask
     //                       [
     //                         00 00 FF FF | 00000000 00000000 11111111 11111111
@@ -192,20 +209,20 @@ __m128i PRESENT_80_CORE::rotateLeftBy61Bits_SIMD_ONLY(__m128i block)
                                        0xE0000000,
                                        0x00,
                                        0x00);
-    present80_internal::print_m128i("UpperLanesRearrangement mask", maskHigher);
+//    present80_internal::print_m128i("UpperLanesRearrangement mask", maskHigher);
 
     // intrnsic for UpperLanesRearrangement = UpperLanesRearrangement AND Mask to get the required bits and zero-ing the rest
     UpperLanesRearrangement = _mm_and_si128(UpperLanesRearrangement, maskHigher);
-    present80_internal::print_m128i("UpperLanesRearrangement AND mask", UpperLanesRearrangement);
+//    present80_internal::print_m128i("UpperLanesRearrangement AND mask", UpperLanesRearrangement);
 
     //shurffling the lanes so that the final orde aligns with the 80 bit output  
     UpperLanesRearrangement = _mm_shuffle_epi32(UpperLanesRearrangement, _MM_SHUFFLE(0, 3, 2, 0));
-    present80_internal::print_m128i("UpperLanesRearrangement shuffled with the lanes 0,3,2,0 to get the MSBs aligned", UpperLanesRearrangement);
+//    present80_internal::print_m128i("UpperLanesRearrangement shuffled with the lanes 0,3,2,0 to get the MSBs aligned", UpperLanesRearrangement);
 
     // We use OR to merge the bits into the final 80-bit state
     // instrincs for result = pperLanesRearrangement AND LowerLanesRearrangement
     __m128i result = _mm_or_si128(UpperLanesRearrangement, LowerLanesRearrangement);
-    present80_internal::print_m128i("UpperLanesRearrangement OR  LowerLanesRearrangement", result);
+//    present80_internal::print_m128i("UpperLanesRearrangement OR  LowerLanesRearrangement", result);
 
     return result;
 }
@@ -264,4 +281,198 @@ void PRESENT_80_CORE::expandRoundKeys(__m128i key, uint8_t Round)
     //TB = (TB & 0x0F) | (Up_Nib << 4);
     //cout << "topByte = 0x" << setw(2) << setfill('0') << hex << (int)TB << dec << endl;
  
+}
+
+// Applies the PRESENT S‑box to all 16 nibbles of the 64‑bit state.
+// 
+// The state is stored in the lower 64 bits of a 128‑bit SIMD register.
+// Each byte contains two nibbles: the high nibble (bits 7–4) and the low nibble (bits 3–0).
+//
+// The algorithmic idea:
+//   1. Extract all high nibbles into one SIMD register.
+//   2. Extract all low nibbles into another SIMD register.
+//   3. Use PSHUFB with the SIMD_S_BOX lookup table to substitute all 16 nibbles in parallel.
+//   4. Recombine the substituted high and low nibbles back into bytes.
+//
+// This leverages the fact that PSHUFB performs 16 parallel 4‑bit table lookups
+// when the input values are in the range 0–15.
+__m128i PRESENT_80_CORE::sBoxLayer(__m128i state)
+{
+    // Extract high nibbles: shift right by 4, then mask to keep only 0x0–0xF.
+    __m128i high = _mm_and_si128(_mm_srli_epi16(state, 4), _mm_set1_epi8(0x0F));
+
+    // Extract low nibbles: mask directly.
+    __m128i low  = _mm_and_si128(state, _mm_set1_epi8(0x0F));
+
+    // Substitute both nibble streams using the SIMD S‑box lookup table.
+    __m128i low_s  = _mm_shuffle_epi8(SIMD_S_BOX, low);
+    __m128i high_s = _mm_shuffle_epi8(SIMD_S_BOX, high);
+
+    //merging the upper and lower nibbles
+    __m128i finalStateafterSBOxing = _mm_or_si128(_mm_slli_epi16(high_s, 4), low_s); 
+    
+    // removign the top 8 bytes from the result as they contain no data
+    finalStateafterSBOxing = _mm_and_si128(finalStateafterSBOxing,
+                                       _mm_set_epi64x(0, -1));
+
+
+    // Recombine substituted nibbles: high nibble << 4 | low nibble.
+    return finalStateafterSBOxing;
+}
+
+
+static inline uint64_t present_pLayer_scalar(uint64_t x)
+{
+    uint64_t y = 0;
+
+    for (int i = 0; i < 63; ++i) {
+        uint64_t bit = (x >> i) & 0x1;
+        y |= bit << ((16 * i) % 63);
+    }
+
+    // bit 63 stays in place
+    y |= (x & (1ULL << 63));
+
+    return y;
+}
+
+//__m128i PRESENT_80_CORE::pLayer(__m128i state)
+//{
+//    present80_internal::print_m128i("Entered the pLayer function", state);
+////    // extract low 64 bits
+//    uint64_t x = static_cast<uint64_t>(_mm_cvtsi128_si64x(state));
+////
+////    // apply scalar pLayer
+////    uint64_t y = present_pLayer_scalar(x);
+////
+////    // put back into SIMD register (upper 64 bits = 0)
+////    return _mm_set_epi64x(0, y);
+//    return state;
+//}
+
+ 
+// This layer performs the bit permutations in the block.
+// Some scalar operations were used and this layer did not entirely use SIMD intrinsics
+// I am stil working out to rotate the bits isndie the 64 bit-block using the vectorised instructions
+// there seems to be an issue with the Microsoft visual C++ compiler.
+// I throws an error during compile time, complaing that if does not have the  followinf instrincisc
+
+// 1. _mm_cvtsi128_si64 / _mm_cvtsi128_si64x
+//   Purpose: Extract the low 64 bits of a __m128i into a uint64_t.
+//   Problem: MSVC does not expose _mm_cvtsi128_si64x unless compiling for x64 with SSE4.1+.
+//   On some configurations, the intrinsic is simply not defined, causing a compile‑time error.
+
+// 2. _mm_extract_epi64
+// Purpose: Extract a 64‑bit lane from a __m128i.
+ 
+ 
+
+// 3. _mm_insert_epi64
+// Purpose: Insert a 64‑bit integer into a specific lane of a __m128i.
+// Problem:  SSE4.1‑only. Not available in the MSVC
+// 4. _mm_blend_epi16, _mm_blend_epi32, _mm_blend_epi64
+// Purpose: Blend lanes or sub‑lanes of SIMD registers.
+// Problem: All require SSE4.1.
+// Not available in your build.
+// Impact:  We could not use blending to assemble the pLayer output. 
+// if these intrinsics were availble, we could  have done the p-layer in full hardware earily
+
+__m128i PRESENT_80_CORE::pLayer(__m128i state)
+{
+    // Extract low 64 bits via store (no _mm_cvtsi128_si64x needed)
+    uint64_t x = 0;
+    
+    state = _mm_and_si128(state, _mm_set_epi64x(0, -1));
+    
+    present80_internal::print_m128i("state after ignoring the top 8 bytes", state);
+
+    _mm_storel_epi64(reinterpret_cast<__m128i*>(&x), state);
+     present80_internal::print_m128i("state after reinterpret cast ", state);
+
+     cout << "Original bytes are :  "  << hex << x << dec << endl;
+    // Scalar PRESENT pLayer on the 64-bit block
+    uint64_t y = 0;
+
+    for (uint32_t i = 0; i < 63; ++i) {
+        uint64_t bit = (x >> i) & 1ULL;
+        uint32_t j   = (16u * i) % 63u;
+        y |= (bit << j);
+    }
+     cout << "Permutated bytes are : " << hex << y << dec << endl;
+    // Bit 63 stays in place
+    y |= (x & (1ULL << 63));
+     cout << "y |= (x & (1ULL << 63));(filling the Last bit(bit[63])) : " << hex << y << dec << endl;
+    
+//    __m128i finalState = _mm_set_epi64x( 0x0000000000000000ULL, y); //strange behavoir of __m128 it,
+//    if you put zero in the first lane, it will take full the entire register with zeroes, 
+//    but if you put a non-zero value int the first lane, it starts to work again.
+
+    // to overcome the above behavoir, we are loading out data in  upper word and zeroes in lower word
+    __m128i finalState = _mm_set_epi64x( y, 0x0000000000000000);    
+    finalState = _mm_shuffle_epi32(finalState, _MM_SHUFFLE(1,0,3,2)); //shuffling to get the actual word in lower lane
+    
+     return finalState;
+}
+
+
+
+
+__m128i PRESENT_80_CORE::encrypt64(uint64_t block)
+{   
+        int round=1 ;
+        __m128i state = _mm_set_epi64x(0, block);
+//        cout << "~~~~~~~~~~~~~~ Round : " << round << " ~~~~~~~~~~~~~~"   <<endl;
+//        // aligning the key in the lower bytes of the SIMD register so as we can XOR it with the state or data directy
+//        RoundKeys[round] = shiftBytesInsideBlock(RoundKeys[round],present80_internal::rotationType::alignKeyForEncryption);
+//        present80_internal::print_m128i("roundKey is", RoundKeys[round]);
+//
+// //       __m128i state = _mm_cvtsi64x_si128(block); //does not compile cause Microsoft's C++ compiler has some plan of its own
+//        __m128i state = _mm_set_epi64x(0, block);
+//        present80_internal::print_m128i("state is", state);
+//
+//        state = _mm_xor_si128(RoundKeys[round], state); //pre-whitening or XOR-ing the key with the input  
+//        present80_internal::print_m128i("State after roundkey Whitening is", state);
+//
+//        state = sBoxLayer(state); //Substituting all the 16 bytes from the S-Box one-by-one  
+//        present80_internal::print_m128i("State S-Box Substitution is", state);
+//
+//        state = pLayer(state); //permutating the bits in the register   
+//        present80_internal::print_m128i("permutated the bits in the register", state);
+
+ 
+        for (round = 1; round<32; round=round+1 ){
+        cout << "~~~~~~~~~~~~~~ Encryption Round : " << round << " ~~~~~~~~~~~~~~"   <<endl;
+        // aligning the key in the lower bytes of the SIMD register so as we can XOR it with the state or data directy
+        RoundKeys[round] = shiftBytesInsideBlock(RoundKeys[round],present80_internal::rotationType::alignKeyForEncryption);
+        present80_internal::print_m128i("roundKey is", RoundKeys[round]);
+
+ //       __m128i state = _mm_cvtsi64x_si128(block); //does not compile cause Microsoft's C++ compiler has some plan of its own
+        //state = _mm_set_epi64x(0, block);
+        present80_internal::print_m128i("state is", state);
+
+        state = _mm_xor_si128(RoundKeys[round], state); //pre-whitening or XOR-ing the key with the input  
+        present80_internal::print_m128i("State after roundkey Whitening is", state);
+
+        state = sBoxLayer(state); //Substituting all the 16 bytes from the S-Box one-by-one  
+        present80_internal::print_m128i("State S-Box Substitution is", state);
+
+        state = pLayer(state); //permutating the bits in the register   
+        present80_internal::print_m128i("permutated the bits in the register", state);
+ 
+            }
+
+        cout << "~~~~~~~~~~~~~~ Encryption Round : " << round << " ~~~~~~~~~~~~~~"   <<endl;       
+        // aligning the key in the lower bytes of the SIMD register so as we can XOR it with the state or data directy
+        RoundKeys[round] = shiftBytesInsideBlock(RoundKeys[round],present80_internal::rotationType::alignKeyForEncryption);
+        present80_internal::print_m128i("roundKey is", RoundKeys[round]);
+
+ //       __m128i state = _mm_cvtsi64x_si128(block); //does not compile cause Microsoft's C++ compiler has some plan of its own
+        //state = _mm_set_epi64x(0, block);
+        present80_internal::print_m128i("state is", state);
+
+        state = _mm_xor_si128(RoundKeys[round], state); //pre-whitening or XOR-ing the key with the input  
+        present80_internal::print_m128i("State after roundkey Whitening is", state);
+
+
+    return state;
 }
