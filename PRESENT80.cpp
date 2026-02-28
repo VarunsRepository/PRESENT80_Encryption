@@ -320,62 +320,7 @@ __m128i PRESENT_80_CORE::sBoxLayer(__m128i state)
     return finalStateafterSBOxing;
 }
 
-
-static inline uint64_t present_pLayer_scalar(uint64_t x)
-{
-    uint64_t y = 0;
-
-    for (int i = 0; i < 63; ++i) {
-        uint64_t bit = (x >> i) & 0x1;
-        y |= bit << ((16 * i) % 63);
-    }
-
-    // bit 63 stays in place
-    y |= (x & (1ULL << 63));
-
-    return y;
-}
-
-//__m128i PRESENT_80_CORE::pLayer(__m128i state)
-//{
-//    present80_internal::print_m128i("Entered the pLayer function", state);
-////    // extract low 64 bits
-//    uint64_t x = static_cast<uint64_t>(_mm_cvtsi128_si64x(state));
-////
-////    // apply scalar pLayer
-////    uint64_t y = present_pLayer_scalar(x);
-////
-////    // put back into SIMD register (upper 64 bits = 0)
-////    return _mm_set_epi64x(0, y);
-//    return state;
-//}
-
  
-// This layer performs the bit permutations in the block.
-// Some scalar operations were used and this layer did not entirely use SIMD intrinsics
-// I am stil working out to rotate the bits isndie the 64 bit-block using the vectorised instructions
-// there seems to be an issue with the Microsoft visual C++ compiler.
-// I throws an error during compile time, complaing that if does not have the  followinf instrincisc
-
-// 1. _mm_cvtsi128_si64 / _mm_cvtsi128_si64x
-//   Purpose: Extract the low 64 bits of a __m128i into a uint64_t.
-//   Problem: MSVC does not expose _mm_cvtsi128_si64x unless compiling for x64 with SSE4.1+.
-//   On some configurations, the intrinsic is simply not defined, causing a compile‑time error.
-
-// 2. _mm_extract_epi64
-// Purpose: Extract a 64‑bit lane from a __m128i.
- 
- 
-
-// 3. _mm_insert_epi64
-// Purpose: Insert a 64‑bit integer into a specific lane of a __m128i.
-// Problem:  SSE4.1‑only. Not available in the MSVC
-// 4. _mm_blend_epi16, _mm_blend_epi32, _mm_blend_epi64
-// Purpose: Blend lanes or sub‑lanes of SIMD registers.
-// Problem: All require SSE4.1.
-// Not available in your build.
-// Impact:  We could not use blending to assemble the pLayer output. 
-// if these intrinsics were availble, we could  have done the p-layer in full hardware earily
 
 __m128i PRESENT_80_CORE::pLayer(__m128i state)
 {
@@ -415,7 +360,31 @@ __m128i PRESENT_80_CORE::pLayer(__m128i state)
 }
 
 
+ 
+// This layer performs the bit permutations in the block.
+// Some scalar operations were used and this layer did not entirely use SIMD intrinsics
+// I am stil working out to rotate the bits isndie the 64 bit-block using the vectorised instructions
+// there seems to be an issue with the Microsoft visual C++ compiler.
+// I throws an error during compile time, complaing that if does not have the  followinf instrincisc
 
+// 1. _mm_cvtsi128_si64 / _mm_cvtsi128_si64x
+//   Purpose: Extract the low 64 bits of a __m128i into a uint64_t.
+//   Problem: MSVC does not expose _mm_cvtsi128_si64x unless compiling for x64 with SSE4.1+.
+//   On some configurations, the intrinsic is simply not defined, causing a compile‑time error.
+
+// 2. _mm_extract_epi64
+// Purpose: Extract a 64‑bit lane from a __m128i.
+ 
+// 3. _mm_insert_epi64
+// Purpose: Insert a 64‑bit integer into a specific lane of a __m128i.
+// Problem:  SSE4.1‑only. Not available in the MSVC
+// 4. _mm_blend_epi16, _mm_blend_epi32, _mm_blend_epi64
+// Purpose: Blend lanes or sub‑lanes of SIMD registers.
+// Problem: All require SSE4.1.
+// Not available in your build.
+// Impact:  We could not use blending to assemble the pLayer output. 
+// if these intrinsics were availble, we could  have done the p-layer in full hardware earily
+ 
 
 __m128i PRESENT_80_CORE::encrypt64(uint64_t block)
 {   
@@ -439,18 +408,18 @@ __m128i PRESENT_80_CORE::encrypt64(uint64_t block)
 //        state = pLayer(state); //permutating the bits in the register   
 //        present80_internal::print_m128i("permutated the bits in the register", state);
 
- 
+ // Note that for  enryption of nth round, we would use (n-1)th round key. That's the only difference between this commnit and the previous one 
         for (round = 1; round<32; round=round+1 ){
         cout << "~~~~~~~~~~~~~~ Encryption Round : " << round << " ~~~~~~~~~~~~~~"   <<endl;
         // aligning the key in the lower bytes of the SIMD register so as we can XOR it with the state or data directy
-        RoundKeys[round] = shiftBytesInsideBlock(RoundKeys[round],present80_internal::rotationType::alignKeyForEncryption);
-        present80_internal::print_m128i("roundKey is", RoundKeys[round]);
+        RoundKeys[round - 1] = shiftBytesInsideBlock(RoundKeys[round - 1],present80_internal::rotationType::alignKeyForEncryption);
+        present80_internal::print_m128i("roundKey is", RoundKeys[round - 1]);
 
  //       __m128i state = _mm_cvtsi64x_si128(block); //does not compile cause Microsoft's C++ compiler has some plan of its own
         //state = _mm_set_epi64x(0, block);
         present80_internal::print_m128i("state is", state);
 
-        state = _mm_xor_si128(RoundKeys[round], state); //pre-whitening or XOR-ing the key with the input  
+        state = _mm_xor_si128(RoundKeys[round - 1], state); //pre-whitening or XOR-ing the key with the input  
         present80_internal::print_m128i("State after roundkey Whitening is", state);
 
         state = sBoxLayer(state); //Substituting all the 16 bytes from the S-Box one-by-one  
@@ -463,14 +432,14 @@ __m128i PRESENT_80_CORE::encrypt64(uint64_t block)
 
         cout << "~~~~~~~~~~~~~~ Encryption Round : " << round << " ~~~~~~~~~~~~~~"   <<endl;       
         // aligning the key in the lower bytes of the SIMD register so as we can XOR it with the state or data directy
-        RoundKeys[round] = shiftBytesInsideBlock(RoundKeys[round],present80_internal::rotationType::alignKeyForEncryption);
-        present80_internal::print_m128i("roundKey is", RoundKeys[round]);
+        RoundKeys[round - 1] = shiftBytesInsideBlock(RoundKeys[round - 1],present80_internal::rotationType::alignKeyForEncryption);
+        present80_internal::print_m128i("roundKey is", RoundKeys[round - 1]);
 
  //       __m128i state = _mm_cvtsi64x_si128(block); //does not compile cause Microsoft's C++ compiler has some plan of its own
         //state = _mm_set_epi64x(0, block);
         present80_internal::print_m128i("state is", state);
 
-        state = _mm_xor_si128(RoundKeys[round], state); //pre-whitening or XOR-ing the key with the input  
+        state = _mm_xor_si128(RoundKeys[round - 1], state); //pre-whitening or XOR-ing the key with the input  
         present80_internal::print_m128i("State after roundkey Whitening is", state);
 
 
