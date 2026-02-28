@@ -358,7 +358,62 @@ __m128i PRESENT_80_CORE::pLayer(__m128i state)
     
      return finalState;
 }
+ 
+__m128i PRESENT_80_CORE:: pLayer_using_SIMD_Only(__m128i state)
+{
+    const __m128i mask1  = _mm_set1_epi64x(0x5555555555555555ULL);
+    const __m128i mask2  = _mm_set1_epi64x(0x3333333333333333ULL);
+    const __m128i mask4  = _mm_set1_epi64x(0x0F0F0F0F0F0F0F0FULL);
+    const __m128i mask8  = _mm_set1_epi64x(0x00FF00FF00FF00FFULL);
+    const __m128i mask16 = _mm_set1_epi64x(0x0000FFFF0000FFFFULL);
+    const __m128i mask32 = _mm_set1_epi64x(0x00000000FFFFFFFFULL);
 
+    __m128i x = state;
+
+    // stage 1: swap adjacent bits
+    __m128i t = _mm_and_si128(x, mask1);
+    x = _mm_or_si128(
+            _mm_slli_epi64(t, 1),
+            _mm_and_si128(_mm_srli_epi64(x, 1), mask1)
+        );
+
+    // stage 2: swap bit pairs
+    t = _mm_and_si128(x, mask2);
+    x = _mm_or_si128(
+            _mm_slli_epi64(t, 2),
+            _mm_and_si128(_mm_srli_epi64(x, 2), mask2)
+        );
+
+    // stage 3: swap nibbles
+    t = _mm_and_si128(x, mask4);
+    x = _mm_or_si128(
+            _mm_slli_epi64(t, 4),
+            _mm_and_si128(_mm_srli_epi64(x, 4), mask4)
+        );
+
+    // stage 4: swap bytes
+    t = _mm_and_si128(x, mask8);
+    x = _mm_or_si128(
+            _mm_slli_epi64(t, 8),
+            _mm_and_si128(_mm_srli_epi64(x, 8), mask8)
+        );
+
+    // stage 5: swap 16-bit words
+    t = _mm_and_si128(x, mask16);
+    x = _mm_or_si128(
+            _mm_slli_epi64(t, 16),
+            _mm_and_si128(_mm_srli_epi64(x, 16), mask16)
+        );
+
+    // stage 6: swap 32-bit halves
+    t = _mm_and_si128(x, mask32);
+    x = _mm_or_si128(
+            _mm_slli_epi64(t, 32),
+            _mm_and_si128(_mm_srli_epi64(x, 32), mask32)
+        );
+
+    return x;
+}
 
  
 // This layer performs the bit permutations in the block.
@@ -408,7 +463,7 @@ __m128i PRESENT_80_CORE::encrypt64(uint64_t block)
 //        state = pLayer(state); //permutating the bits in the register   
 //        present80_internal::print_m128i("permutated the bits in the register", state);
 
- // Note that for  enryption of nth round, we would use (n-1)th round key. That's the only difference between this commnit and the previous one 
+ 
         for (round = 1; round<32; round=round+1 ){
         cout << "~~~~~~~~~~~~~~ Encryption Round : " << round << " ~~~~~~~~~~~~~~"   <<endl;
         // aligning the key in the lower bytes of the SIMD register so as we can XOR it with the state or data directy
@@ -425,6 +480,7 @@ __m128i PRESENT_80_CORE::encrypt64(uint64_t block)
         state = sBoxLayer(state); //Substituting all the 16 bytes from the S-Box one-by-one  
         present80_internal::print_m128i("State S-Box Substitution is", state);
 
+        //state = pLayer_using_SIMD_Only(state); //permutating the bits in the register   
         state = pLayer(state); //permutating the bits in the register   
         present80_internal::print_m128i("permutated the bits in the register", state);
  
